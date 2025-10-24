@@ -1,5 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
 import PIL.Image
 import torch
@@ -9,6 +11,7 @@ import numpy as np
 from typing import List, Optional
 import helper
 import json
+import os
 
 app = FastAPI(
     title="BidReady AI Model API",
@@ -59,9 +62,35 @@ async def root():
         "endpoints": {
             "/detect": "POST - Upload image for object detection",
             "/health": "GET - Health check",
-            "/labels": "GET - Get available detection labels"
+            "/labels": "GET - Get available detection labels",
+            "/docs": "GET - Interactive API documentation (Swagger UI)",
+            "/documentation": "GET - Complete API documentation page",
+            "/test": "GET - Interactive test interface"
+        },
+        "links": {
+            "interactive_docs": "/docs",
+            "full_documentation": "/documentation",
+            "test_interface": "/test"
         }
     }
+
+@app.get("/documentation", response_class=HTMLResponse)
+async def get_documentation():
+    """Serve the complete API documentation page"""
+    try:
+        with open("docs.html", "r", encoding="utf-8") as file:
+            return HTMLResponse(content=file.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Documentation page not found")
+
+@app.get("/test", response_class=HTMLResponse)
+async def get_test_page():
+    """Serve the interactive test page"""
+    try:
+        with open("test.html", "r", encoding="utf-8") as file:
+            return HTMLResponse(content=file.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Test page not found")
 
 @app.get("/health")
 async def health_check():

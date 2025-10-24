@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BidReady AI Model API Documentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem 0;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        nav {
+            background: white;
+            padding: 1rem 0;
+            margin-bottom: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        nav ul {
+            list-style: none;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 2rem;
+        }
+        
+        nav a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        
+        nav a:hover {
+            background-color: #f0f2ff;
+        }
+        
+        .content {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+        
+        section {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        
+        h2 {
+            color: #667eea;
+            margin-bottom: 1rem;
+            font-size: 1.8rem;
+            border-bottom: 2px solid #f0f2ff;
+            padding-bottom: 0.5rem;
+        }
+        
+        h3 {
+            color: #555;
+            margin: 1.5rem 0 1rem 0;
+            font-size: 1.3rem;
+        }
+        
+        .endpoint {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 6px;
+            margin: 1rem 0;
+            border-left: 4px solid #667eea;
+        }
+        
+        .method {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            color: white;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+        
+        .get { background-color: #28a745; }
+        .post { background-color: #007bff; }
+        
+        pre {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            border: 1px solid #e9ecef;
+        }
+        
+        code {
+            background: #f8f9fa;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.9rem;
+        }
+        
+        .example-box {
+            background: #e8f5e8;
+            border: 1px solid #d4edda;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        
+        .warning-box {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        
+        .info-box {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            background-color: #6c757d;
+            color: white;
+            border-radius: 0.25rem;
+        }
+        
+        .badge.required {
+            background-color: #dc3545;
+        }
+        
+        .badge.optional {
+            background-color: #6c757d;
+        }
+        
+        .demo-section {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            text-align: center;
+        }
+        
+        .demo-section h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
+        .demo-button {
+            background: white;
+            color: #f5576c;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 6px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 1rem;
+            transition: transform 0.2s;
+        }
+        
+        .demo-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            border-top: 1px solid #e9ecef;
+            margin-top: 2rem;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            nav ul {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>BidReady AI Model API</h1>
+            <p class="subtitle">Floor Plan Object Detection using YOLOv8</p>
+        </div>
+    </header>
+
+    <nav>
+        <div class="container">
+            <ul>
+                <li><a href="#overview">Overview</a></li>
+                <li><a href="#quickstart">Quick Start</a></li>
+                <li><a href="#endpoints">API Endpoints</a></li>
+                <li><a href="#examples">Examples</a></li>
+                <li><a href="#integration">Integration</a></li>
+                <li><a href="#demo">Live Demo</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section id="overview">
+            <h2>Overview</h2>
+            <p>The BidReady AI Model API provides powerful floor plan object detection capabilities using state-of-the-art YOLOv8 technology. Upload an image of a floor plan and get detailed analysis of architectural elements including doors, windows, walls, and more.</p>
+            
+            <h3>Key Features</h3>
+            <ul>
+                <li><strong>9 Object Types:</strong> Detect columns, curtain walls, dimensions, doors, railings, sliding doors, staircases, walls, and windows</li>
+                <li><strong>Confidence Scoring:</strong> Adjustable detection confidence thresholds (0.0 - 1.0)</li>
+                <li><strong>Selective Detection:</strong> Choose which object types to detect</li>
+                <li><strong>Annotated Images:</strong> Get back annotated images with bounding boxes</li>
+                <li><strong>Object Counting:</strong> Automatic counting of detected objects</li>
+                <li><strong>RESTful API:</strong> Easy integration with any web application</li>
+            </ul>
+
+            <div class="info-box">
+                <strong>Base URLs:</strong><br>
+                • Local Development: <code>http://localhost:8000</code><br>
+                • Network Access: <code>http://192.168.1.38:8000</code>
+            </div>
+        </section>
+
+        <section id="quickstart">
+            <h2>Quick Start</h2>
+            
+            <h3>1. Health Check</h3>
+            <p>First, verify the API is running:</p>
+            <pre><code>curl http://localhost:8000/health</code></pre>
+            
+            <h3>2. Simple Detection</h3>
+            <p>Upload an image for detection with default settings:</p>
+            <pre><code>curl -X POST "http://localhost:8000/detect-simple" \
+     -H "Content-Type: multipart/form-data" \
+     -F "file=@your_floorplan.jpg"</code></pre>
+            
+            <h3>3. Advanced Detection</h3>
+            <p>Customize confidence and select specific objects:</p>
+            <pre><code>curl -X POST "http://localhost:8000/detect?confidence=0.7&selected_labels=Door,Window" \
+     -H "Content-Type: multipart/form-data" \
+     -F "file=@your_floorplan.jpg"</code></pre>
+        </section>
+
+        <section id="endpoints">
+            <h2>API Endpoints</h2>
+
+            <div class="endpoint">
+                <span class="method get">GET</span> <strong>/</strong>
+                <p>Returns API information and available endpoints.</p>
+            </div>
+
+            <div class="endpoint">
+                <span class="method get">GET</span> <strong>/health</strong>
+                <p>Health check endpoint. Returns API status and model loading status.</p>
+            </div>
+
+            <div class="endpoint">
+                <span class="method get">GET</span> <strong>/labels</strong>
+                <p>Get list of all available detection labels.</p>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span> <strong>/detect</strong>
+                <p>Full object detection with customizable parameters.</p>
+                
+                <h4>Parameters:</h4>
+                <table>
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Type</th>
+                        <th>Required</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>file</td>
+                        <td>File</td>
+                        <td><span class="badge required">Required</span></td>
+                        <td>Image file (JPG, JPEG, PNG)</td>
+                    </tr>
+                    <tr>
+                        <td>confidence</td>
+                        <td>Float</td>
+                        <td><span class="badge optional">Optional</span></td>
+                        <td>Detection threshold (0.0-1.0, default: 0.25)</td>
+                    </tr>
+                    <tr>
+                        <td>selected_labels</td>
+                        <td>String</td>
+                        <td><span class="badge optional">Optional</span></td>
+                        <td>Comma-separated list of labels to detect</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span> <strong>/detect-simple</strong>
+                <p>Simplified detection endpoint using default parameters (confidence=0.25, all labels).</p>
+                
+                <h4>Parameters:</h4>
+                <table>
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Type</th>
+                        <th>Required</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>file</td>
+                        <td>File</td>
+                        <td><span class="badge required">Required</span></td>
+                        <td>Image file (JPG, JPEG, PNG)</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h3>Response Format</h3>
+            <p>All detection endpoints return JSON in the following format:</p>
+            <pre><code>{
+  "success": true,
+  "total_detections": 5,
+  "object_counts": {
+    "Door": 2,
+    "Window": 3
+  },
+  "detections": [
+    {
+      "label": "Door",
+      "confidence": 0.85,
+      "bbox": {
+        "x1": 100.5,
+        "y1": 200.3,
+        "x2": 150.8,
+        "y2": 280.1
+      }
+    }
+  ],
+  "annotated_image": "data:image/png;base64,iVBORw0KGgo...",
+  "parameters": {
+    "confidence": 0.25,
+    "selected_labels": ["Door", "Window", "Wall"]
+  }
+}</code></pre>
+
+            <h3>Detectable Objects</h3>
+            <div class="example-box">
+                <strong>Available Labels:</strong> Column, Curtain Wall, Dimension, Door, Railing, Sliding Door, Stair Case, Wall, Window
+            </div>
+        </section>
+
+        <section id="examples">
+            <h2>Usage Examples</h2>
+
+            <h3>JavaScript/Fetch API</h3>
+            <pre><code>// Simple detection
+const formData = new FormData();
+formData.append('file', imageFile);
+
+fetch('http://localhost:8000/detect-simple', {
+    method: 'POST',
+    body: formData
+})
+.then(response => response.json())
+.then(data => {
+    console.log('Object counts:', data.object_counts);
+    console.log('Total detections:', data.total_detections);
+    
+    // Display annotated image
+    document.getElementById('result-img').src = data.annotated_image;
+})
+.catch(error => console.error('Error:', error));</code></pre>
+
+            <h3>Python Requests</h3>
+            <pre><code>import requests
+
+# Upload and detect
+with open('floorplan.jpg', 'rb') as file:
+    response = requests.post(
+        'http://localhost:8000/detect',
+        files={'file': file},
+        params={
+            'confidence': 0.5,
+            'selected_labels': 'Door,Window,Wall'
+        }
+    )
+
+result = response.json()
+print(f"Found {result['total_detections']} objects:")
+for label, count in result['object_counts'].items():
+    print(f"- {label}: {count}")</code></pre>
+
+            <h3>jQuery Example</h3>
+            <pre><code>$('#upload-form').on('submit', function(e) {
+    e.preventDefault();
+    
+    var formData = new FormData();
+    formData.append('file', $('#image-input')[0].files[0]);
+    
+    $.ajax({
+        url: 'http://localhost:8000/detect-simple',
+        type: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: function(data) {
+            $('#results').html(
+                '<h4>Results:</h4>' +
+                '<p>Total detections: ' + data.total_detections + '</p>' +
+                '<img src="' + data.annotated_image + '" alt="Annotated result">'
+            );
+        },
+        error: function(xhr, status, error) {
+            console.error('Detection failed:', error);
+        }
+    });
+});</code></pre>
+        </section>
+
+        <section id="integration">
+            <h2>Website Integration Guide</h2>
+
+            <h3>Frontend Integration</h3>
+            <p>Here's a complete example of integrating the API into your website:</p>
+
+            <pre><code>&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+    &lt;title&gt;Floor Plan Analyzer&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;h1&gt;Upload Floor Plan&lt;/h1&gt;
+    
+    &lt;form id="upload-form"&gt;
+        &lt;input type="file" id="image-input" accept="image/*" required&gt;
+        &lt;label&gt;
+            Confidence: 
+            &lt;input type="range" id="confidence" min="0" max="1" step="0.1" value="0.25"&gt;
+            &lt;span id="confidence-value"&gt;0.25&lt;/span&gt;
+        &lt;/label&gt;
+        &lt;button type="submit"&gt;Analyze Floor Plan&lt;/button&gt;
+    &lt;/form&gt;
+    
+    &lt;div id="results"&gt;&lt;/div&gt;
+    &lt;div id="loading" style="display:none;"&gt;Processing...&lt;/div&gt;
+
+    &lt;script&gt;
+        document.getElementById('upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('image-input');
+            const confidence = document.getElementById('confidence').value;
+            const resultsDiv = document.getElementById('results');
+            const loadingDiv = document.getElementById('loading');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select an image');
+                return;
+            }
+            
+            // Show loading
+            loadingDiv.style.display = 'block';
+            resultsDiv.innerHTML = '';
+            
+            // Prepare form data
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch(`http://localhost:8000/detect?confidence=${confidence}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Display results
+                    let html = `&lt;h3&gt;Detection Results&lt;/h3&gt;`;
+                    html += `&lt;p&gt;Total objects found: ${data.total_detections}&lt;/p&gt;`;
+                    
+                    if (Object.keys(data.object_counts).length > 0) {
+                        html += `&lt;h4&gt;Object Counts:&lt;/h4&gt;&lt;ul&gt;`;
+                        for (const [label, count] of Object.entries(data.object_counts)) {
+                            html += `&lt;li&gt;${label}: ${count}&lt;/li&gt;`;
+                        }
+                        html += `&lt;/ul&gt;`;
+                    }
+                    
+                    html += `&lt;h4&gt;Annotated Image:&lt;/h4&gt;`;
+                    html += `&lt;img src="${data.annotated_image}" alt="Annotated floor plan" style="max-width: 100%;"&gt;`;
+                    
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = '&lt;p style="color: red;"&gt;Detection failed&lt;/p&gt;';
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `&lt;p style="color: red;"&gt;Error: ${error.message}&lt;/p&gt;`;
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        });
+        
+        // Update confidence display
+        document.getElementById('confidence').addEventListener('input', function() {
+            document.getElementById('confidence-value').textContent = this.value;
+        });
+    &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+
+            <h3>CORS Configuration</h3>
+            <div class="warning-box">
+                <strong>Important:</strong> For production use, update the CORS settings in <code>api.py</code> to only allow your website's domain instead of allowing all origins (<code>*</code>).
+            </div>
+
+            <pre><code># In api.py, replace:
+allow_origins=["*"]
+
+# With your domain:
+allow_origins=["https://yourdomain.com", "https://www.yourdomain.com"]</code></pre>
+        </section>
+
+        <section id="demo" class="demo-section">
+            <h2>Interactive Demo</h2>
+            <p>Test the API directly with our interactive Swagger UI documentation.</p>
+            <a href="http://localhost:8000/docs" class="demo-button" target="_blank">Open Interactive Demo</a>
+            <p style="margin-top: 1rem; opacity: 0.9;">
+                The interactive documentation allows you to test all endpoints, upload images, and see real responses directly in your browser.
+            </p>
+        </section>
+
+        <section>
+            <h2>Error Handling</h2>
+            
+            <h3>Common Error Codes</h3>
+            <table>
+                <tr>
+                    <th>Status Code</th>
+                    <th>Error Type</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td>400</td>
+                    <td>Bad Request</td>
+                    <td>Invalid file type, confidence out of range, or invalid labels</td>
+                </tr>
+                <tr>
+                    <td>500</td>
+                    <td>Internal Server Error</td>
+                    <td>Model loading failed or processing error</td>
+                </tr>
+            </table>
+
+            <h3>Error Response Format</h3>
+            <pre><code>{
+    "detail": "Invalid file type. Only JPG, JPEG, and PNG are supported."
+}</code></pre>
+
+            <div class="warning-box">
+                <strong>File Size Limits:</strong> Keep uploaded images under 10MB for optimal performance. Very large images may cause timeout errors.
+            </div>
+        </section>
+
+        <section>
+            <h2>Performance & Limitations</h2>
+            
+            <h3>Performance Tips</h3>
+            <ul>
+                <li><strong>Image Size:</strong> Resize images to 1024x1024 pixels or smaller for faster processing</li>
+                <li><strong>File Format:</strong> JPEG files are typically smaller and faster to process than PNG</li>
+                <li><strong>Confidence Threshold:</strong> Higher confidence values (0.5-0.8) reduce false positives</li>
+                <li><strong>Selective Detection:</strong> Specify only needed labels to improve speed</li>
+            </ul>
+
+            <h3>Current Limitations</h3>
+            <ul>
+                <li>Single image processing only (no batch uploads)</li>
+                <li>Maximum file size: 10MB</li>
+                <li>Supported formats: JPG, JPEG, PNG only</li>
+                <li>Processing time: 2-10 seconds depending on image size and complexity</li>
+            </ul>
+        </section>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 BidReady AI Model API. Built with FastAPI and YOLOv8.</p>
+            <p>For support or questions, visit our <a href="http://localhost:8000/docs">interactive documentation</a>.</p>
+        </div>
+    </footer>
+</body>
+</html>

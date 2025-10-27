@@ -50,14 +50,14 @@ def load_model():
             torch.load = original_torch_load
     return model
 
-def create_tiles(image: PIL.Image.Image, tile_size: int = 1280, overlap: int = 200) -> List[Tuple[PIL.Image.Image, Tuple[int, int]]]:
+def create_tiles(image: PIL.Image.Image, tile_size: int = 1920, overlap: int = 320) -> List[Tuple[PIL.Image.Image, Tuple[int, int]]]:
     """
     Split large image into overlapping tiles for better detection
     
     Args:
         image: Input PIL Image
-        tile_size: Size of each tile (default 1280x1280)
-        overlap: Overlap between tiles in pixels (default 200)
+        tile_size: Size of each tile (default 1920x1920)
+        overlap: Overlap between tiles in pixels (default 320)
     
     Returns:
         List of tuples (tile_image, (x_offset, y_offset))
@@ -99,18 +99,18 @@ def merge_detections(all_detections: List, image_size: Tuple[int, int], iou_thre
     if not all_detections:
         return []
     
-    # Convert to numpy arrays for NMS
-    boxes = []
+    # Convert to numpy arrays for NMS (we'll build xyxy and convert to xywh for cv2 NMSBoxes)
+    boxes_xyxy = []
     scores = []
     labels = []
     
     for det in all_detections:
         bbox = det['bbox']
-        boxes.append([bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']])
+        boxes_xyxy.append([bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']])
         scores.append(det['confidence'])
         labels.append(det['label'])
-    
-    boxes = np.array(boxes)
+
+    boxes_xyxy = np.array(boxes_xyxy, dtype=float)
     scores = np.array(scores)
     
     # Apply NMS per class
@@ -119,38 +119,44 @@ def merge_detections(all_detections: List, image_size: Tuple[int, int], iou_thre
     
     for label in unique_labels:
         label_mask = np.array([l == label for l in labels])
-        label_boxes = boxes[label_mask]
+        label_boxes_xyxy = boxes_xyxy[label_mask]
         label_scores = scores[label_mask]
         label_indices = np.where(label_mask)[0]
         
-        if len(label_boxes) > 0:
-            # Apply NMS using cv2
+        if len(label_boxes_xyxy) > 0:
+            # Convert xyxy -> xywh as required by cv2.dnn.NMSBoxes
+            label_boxes_xywh = []
+            for x1, y1, x2, y2 in label_boxes_xyxy.tolist():
+                w = max(0.0, x2 - x1)
+                h = max(0.0, y2 - y1)
+                label_boxes_xywh.append([float(x1), float(y1), float(w), float(h)])
+
+            # Apply NMS using cv2 with a low score threshold (actual filtering handled by model confidence)
             indices = cv2.dnn.NMSBoxes(
-                label_boxes.tolist(),
-                label_scores.tolist(),
-                score_threshold=0.0,
-                nms_threshold=iou_threshold
+                bboxes=label_boxes_xywh,
+                scores=label_scores.astype(float).tolist(),
+                score_threshold=1e-6,
+                nms_threshold=float(iou_threshold)
             )
             
             if len(indices) > 0:
-                keep_indices.extend(label_indices[indices.flatten()].tolist())
+                keep_indices.extend(label_indices[np.array(indices).flatten()].tolist())
     
     # Return filtered detections
     return [all_detections[i] for i in keep_indices]
 
-def should_use_tiling(image: PIL.Image.Image, threshold: int = 5000) -> bool:
+def should_use_tiling(image: PIL.Image.Image, threshold: int = 2000) -> bool:
     """
     Determine if image should be processed with tiling
     
     Args:
         image: Input PIL Image
-        threshold: Pixel threshold for largest dimension (default 5000)
+        threshold: Pixel threshold for largest dimension
     
     Returns:
         True if tiling should be used
     """
     width, height = image.size
-    # Only use tiling for VERY large images
     return max(width, height) > threshold
 
 @app.on_event("startup")
@@ -280,7 +286,7 @@ async def detect_objects(
         
         if use_tiling:
             # Process image with tiling for better detection on large images
-            tiles = create_tiles(image, tile_size=1280, overlap=200)
+            tiles = create_tiles(image, tile_size=1920, overlap=320)
             
             for tile_img, (x_offset, y_offset) in tiles:
                 # Run prediction on tile with proper image size
@@ -303,7 +309,7 @@ async def detect_objects(
                         }
                         all_detections.append(detection)
             
-            # Merge overlapping detections with lower IOU threshold to keep more detections
+            # Merge overlapping detections
             detections = merge_detections(all_detections, original_size, iou_threshold=0.3)
             
             # Create annotated image manually

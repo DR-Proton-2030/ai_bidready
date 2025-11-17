@@ -15,6 +15,11 @@ try:
 except ImportError:
     pytesseract = None
 
+try:
+    import boto3
+except ImportError:
+    boto3 = None
+
 
 def random_string_generator(size=6):
     return ''.join(random.choice(string.ascii_lowercase) for _ in range(size))
@@ -507,6 +512,65 @@ def find_horizontal_dimension_length_px(image_path_or_bytes, bbox, search_half_h
     return float(abs(x2 - x1))
 
 
+def extract_text_from_bbox_rekognition(image_bytes, bbox):
+    """Extract text from a bounding box using AWS Rekognition.
+    bbox: dict with x1,y1,x2,y2 keys.
+    Returns the extracted text string (stripped)."""
+    if boto3 is None:
+        raise ImportError("boto3 is not installed. Install with: pip install boto3")
+    
+    # Convert image_bytes to numpy array
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    h, w = img_cv.shape[:2]
+    
+    # Calculate bbox dimensions
+    bbox_width = bbox['x2'] - bbox['x1']
+    bbox_height = bbox['y2'] - bbox['y1']
+    
+    # If bbox is very thin, expand vertically to capture text
+    if bbox_height < 15:
+        vertical_padding = max(40, int(bbox_width * 0.12))
+        horizontal_padding = 15
+    else:
+        vertical_padding = 15
+        horizontal_padding = 15
+    
+    # Crop with padding
+    x1 = max(0, int(round(bbox['x1'])) - horizontal_padding)
+    y1 = max(0, int(round(bbox['y1'])) - vertical_padding)
+    x2 = min(w, int(round(bbox['x2'])) + horizontal_padding)
+    y2 = min(h, int(round(bbox['y2'])) + vertical_padding)
+    
+    # Crop the region
+    cropped = img_cv[y1:y2, x1:x2]
+    
+    # Encode cropped image to bytes
+    _, buffer = cv2.imencode('.png', cropped)
+    cropped_bytes = buffer.tobytes()
+    
+    # Call AWS Rekognition
+    try:
+        rekognition = boto3.client('rekognition')
+        response = rekognition.detect_text(Image={'Bytes': cropped_bytes})
+        
+        # Extract all detected text, prioritize LINE type
+        detected_texts = []
+        for text_detection in response.get('TextDetections', []):
+            if text_detection['Type'] == 'LINE':
+                detected_texts.append((text_detection['DetectedText'], text_detection['Confidence']))
+        
+        # Return the text with highest confidence
+        if detected_texts:
+            detected_texts.sort(key=lambda x: x[1], reverse=True)
+            return detected_texts[0][0].strip()
+        
+        return ""
+    except Exception as e:
+        # Fallback to empty if Rekognition fails
+        return ""
+
+
 def extract_text_from_bbox_ocr(image_path_or_bytes, bbox, padding=20, save_debug=False, debug_path=None):
     """Extract text from a bounding box using pytesseract OCR.
     bbox: dict with x1,y1,x2,y2 keys.
@@ -539,71 +603,29 @@ def extract_text_from_bbox_ocr(image_path_or_bytes, bbox, padding=20, save_debug
     
     # Crop ONLY this bbox region from the full image
     cropped = img_cv[y1:y2, x1:x2]
-    crop_h, crop_w = cropped.shape[:2]
     
     # Convert to grayscale
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     
-    # Adaptive upscaling based on crop size (smaller = more upscaling)
-    if crop_h < 30 or crop_w < 60:
-        scale_factor = 6  # Very small text
-    elif crop_h < 50 or crop_w < 100:
-        scale_factor = 4  # Small text
-    else:
-        scale_factor = 3  # Normal text
+    # FIXED upscaling - 3x is enough and much faster
+    gray_scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     
-    gray_scaled = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
+    # Use ONLY Otsu thresholding (fastest and most reliable)
+    _, binary = cv2.threshold(gray_scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    best_text = ""
-    best_image = None
-    
-    # Try 3 quick preprocessing techniques
-    preprocessed_images = []
-    
-    # 1. Otsu's thresholding (usually best)
-    _, otsu = cv2.threshold(gray_scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    preprocessed_images.append(otsu)
-    
-    # 2. Inverted Otsu (for white text on dark background)
-    _, otsu_inv = cv2.threshold(gray_scaled, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    preprocessed_images.append(otsu_inv)
-    
-    # 3. Adaptive threshold
-    adaptive = cv2.adaptiveThreshold(gray_scaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                    cv2.THRESH_BINARY, 11, 2)
-    preprocessed_images.append(adaptive)
-    
-    # Try OCR on each preprocessed image (fast - only 2 PSM modes)
-    for preprocessed in preprocessed_images:
-        preprocessed_pil = Image.fromarray(preprocessed)
-        
-        # Only try the 2 most reliable modes
-        for config in ['--psm 7 --oem 3', '--psm 13 --oem 3']:
-            try:
-                text = pytesseract.image_to_string(preprocessed_pil, config=config).strip()
-                # Prefer text with dimension-like patterns
-                if text and ('"' in text or "'" in text or '-' in text or any(c.isdigit() for c in text)):
-                    if len(text) > len(best_text):
-                        best_text = text
-                        best_image = preprocessed
-                        # If we found good text, stop searching
-                        if len(best_text) > 3:
-                            break
-            except Exception:
-                continue
-        
-        # Early exit if we found good text
-        if len(best_text) > 3:
-            break
-    
-    # Save debug image if requested (save the best preprocessed version)
+    # Save debug image if requested
     if save_debug and debug_path:
-        if best_image is not None:
-            cv2.imwrite(debug_path, best_image)
-        else:
-            cv2.imwrite(debug_path, preprocessed_images[0])
+        cv2.imwrite(debug_path, binary)
     
-    return best_text
+    # Convert to PIL for pytesseract
+    preprocessed_pil = Image.fromarray(binary)
+    
+    # Use ONLY PSM 7 (single line - fastest for dimension text)
+    try:
+        text = pytesseract.image_to_string(preprocessed_pil, config='--psm 7 --oem 3').strip()
+        return text
+    except Exception:
+        return ""
 
 
 def compute_px_per_inch_from_dimension(image_path_or_bytes, bbox, dim_text):

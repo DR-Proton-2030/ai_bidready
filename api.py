@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import os
 import tempfile
 import cv2
-from service.detect import detect_shapes, build_svg_from_paths, extract_text_from_bbox_ocr, compute_px_per_inch_from_dimension, convert_area_px_to_sqin, parse_scale_text, compute_actual_sqft_from_drawing
+from service.detect import detect_shapes, build_svg_from_paths, extract_text_from_bbox_rekognition, compute_px_per_inch_from_dimension, convert_area_px_to_sqin, parse_scale_text, compute_actual_sqft_from_drawing
 
 app = FastAPI(
     title="BidReady AI Model API",
@@ -407,18 +407,18 @@ async def detect_objects(
         dimension_detections = [d for d in detections if d['label'] == 'Dimension']
         
         if dimension_detections:
-            # Smart selection: Pick best dimension candidates (larger bboxes, more likely to have text)
+            # Smart selection: Try top 3 smallest bboxes (likely actual dimension text, not lines)
             def score_dimension(det):
                 bbox = det['bbox']
                 width = bbox['x2'] - bbox['x1']
                 height = bbox['y2'] - bbox['y1']
                 area = width * height
-                # Prefer wider boxes (horizontal dimensions) and larger areas
-                return area + (width * 2)  # Give bonus to horizontal dimensions
+                # Prefer SMALLER boxes (actual text annotations are compact)
+                return -area  # Negative so smallest comes first
             
-            # Sort by score and take only top 2 candidates
+            # Sort by score and take top 3 smallest candidates
             dimension_detections.sort(key=score_dimension, reverse=True)
-            top_candidates = dimension_detections[:2]
+            top_candidates = dimension_detections[:3]
             
             # Create debug directory if it doesn't exist
             debug_dir = "debug_dimension_crops"
@@ -428,33 +428,23 @@ async def detect_objects(
             
             for dim_idx, dim_detection in enumerate(top_candidates):
                 try:
-                    # Save cropped bbox to file for debugging
-                    debug_path = os.path.join(debug_dir, f"dimension_bbox_{dim_idx}.png")
-                    
-                    # Extract text from THIS specific bbox only (cropped region)
-                    dim_text = extract_text_from_bbox_ocr(
-                        image_bytes, 
-                        dim_detection['bbox'], 
-                        padding=30,  # More padding for context
-                        save_debug=True,
-                        debug_path=debug_path
-                    )
+                    # Extract text using AWS Rekognition (NO upscaling needed)
+                    dim_text = extract_text_from_bbox_rekognition(image_bytes, dim_detection['bbox'])
                     
                     # Log what we extracted
                     attempt_info = {
                         "bbox_index": dim_idx,
                         "bbox": dim_detection['bbox'],
-                        "ocr_text": dim_text,
-                        "debug_image": debug_path
+                        "ocr_text": dim_text
                     }
                     
                     if dim_text and len(dim_text) > 0:
-                        # Try to parse and compute px_per_inch from THIS bbox
+                        # Try to parse and compute px_per_inch
                         try:
                             px_per_inch, px_length, real_inches = compute_px_per_inch_from_dimension(
                                 image_bytes, dim_detection['bbox'], dim_text
                             )
-                            # SUCCESS! Use this dimension
+                            # SUCCESS!
                             dimension_info = {
                                 "text": dim_text,
                                 "px_length": px_length,
@@ -463,39 +453,34 @@ async def detect_objects(
                                 "bbox_used": dim_detection['bbox'],
                                 "detection_index": dim_idx,
                                 "total_detections": len(dimension_detections),
-                                "candidates_tried": len(top_candidates),
-                                "debug_image": debug_path
+                                "method": "aws_rekognition"
                             }
-                            break  # Success! Stop trying other bboxes
+                            break  # Success! Stop trying
                         except Exception as parse_error:
                             attempt_info["parse_error"] = str(parse_error)
                             attempted_results.append(attempt_info)
-                            # Continue to next bbox
                             continue
                     else:
-                        attempt_info["error"] = "No text extracted from this bbox"
+                        attempt_info["error"] = "No text extracted from bbox"
                         attempted_results.append(attempt_info)
-                        # Continue to next bbox
                         continue
                         
                 except Exception as e:
                     attempted_results.append({
                         "bbox_index": dim_idx,
                         "bbox": dim_detection['bbox'],
-                        "error": str(e),
-                        "debug_image": f"debug_dimension_crops/dimension_bbox_{dim_idx}.png"
+                        "error": str(e)
                     })
-                    # Continue to next bbox
                     continue
             
-            # If we didn't find any valid dimension, report all attempts
+            # If we didn't find any valid dimension, report attempts
             if not dimension_info:
                 dimension_info = {
                     "error": "Could not extract valid dimension from any bbox",
                     "total_dimension_detections": len(dimension_detections),
                     "candidates_tried": len(top_candidates),
                     "attempts": attempted_results,
-                    "debug_directory": debug_dir
+                    "method": "aws_rekognition"
                 }
         
         # 8️⃣ Attempt to detect and parse scale information
@@ -511,7 +496,7 @@ async def detect_objects(
                 
             # Try to extract text and check if it contains scale info (use image_bytes)
             try:
-                text = extract_text_from_bbox_ocr(image_bytes, det['bbox'])
+                text = extract_text_from_bbox_rekognition(image_bytes, det['bbox'])
                 if text and any(keyword in text.upper() for keyword in ['SCALE', '=', ':', 'NTS', 'NOT TO SCALE']):
                     try:
                         parsed_scale = parse_scale_text(text)

@@ -399,31 +399,104 @@ async def detect_objects(
         PIL.Image.fromarray(annotated).save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
         
-        # 7️⃣ Attempt to compute px_per_inch from first Dimension detection
+        # 7️⃣ Attempt to compute px_per_inch from Dimension detections
         px_per_inch = None
         dimension_info = None
         
-        # Find first Dimension detection
+        # Find ALL Dimension detections
         dimension_detections = [d for d in detections if d['label'] == 'Dimension']
+        
         if dimension_detections:
-            first_dim = dimension_detections[0]
-            try:
-                # Extract text from dimension bbox using OCR
-                dim_text = extract_text_from_bbox_ocr(req.image_url, first_dim['bbox'])
-                if dim_text:
-                    # Compute px_per_inch
-                    px_per_inch, px_length, real_inches = compute_px_per_inch_from_dimension(
-                        req.image_url, first_dim['bbox'], dim_text
+            # Smart selection: Pick best dimension candidates (larger bboxes, more likely to have text)
+            def score_dimension(det):
+                bbox = det['bbox']
+                width = bbox['x2'] - bbox['x1']
+                height = bbox['y2'] - bbox['y1']
+                area = width * height
+                # Prefer wider boxes (horizontal dimensions) and larger areas
+                return area + (width * 2)  # Give bonus to horizontal dimensions
+            
+            # Sort by score and take only top 2 candidates
+            dimension_detections.sort(key=score_dimension, reverse=True)
+            top_candidates = dimension_detections[:2]
+            
+            # Create debug directory if it doesn't exist
+            debug_dir = "debug_dimension_crops"
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            attempted_results = []
+            
+            for dim_idx, dim_detection in enumerate(top_candidates):
+                try:
+                    # Save cropped bbox to file for debugging
+                    debug_path = os.path.join(debug_dir, f"dimension_bbox_{dim_idx}.png")
+                    
+                    # Extract text from THIS specific bbox only (cropped region)
+                    dim_text = extract_text_from_bbox_ocr(
+                        image_bytes, 
+                        dim_detection['bbox'], 
+                        padding=30,  # More padding for context
+                        save_debug=True,
+                        debug_path=debug_path
                     )
-                    dimension_info = {
-                        "text": dim_text,
-                        "px_length": px_length,
-                        "real_inches": real_inches,
-                        "px_per_inch": px_per_inch
+                    
+                    # Log what we extracted
+                    attempt_info = {
+                        "bbox_index": dim_idx,
+                        "bbox": dim_detection['bbox'],
+                        "ocr_text": dim_text,
+                        "debug_image": debug_path
                     }
-            except Exception as e:
-                # If dimension parsing fails, continue without conversion
-                dimension_info = {"error": str(e)}
+                    
+                    if dim_text and len(dim_text) > 0:
+                        # Try to parse and compute px_per_inch from THIS bbox
+                        try:
+                            px_per_inch, px_length, real_inches = compute_px_per_inch_from_dimension(
+                                image_bytes, dim_detection['bbox'], dim_text
+                            )
+                            # SUCCESS! Use this dimension
+                            dimension_info = {
+                                "text": dim_text,
+                                "px_length": px_length,
+                                "real_inches": real_inches,
+                                "px_per_inch": px_per_inch,
+                                "bbox_used": dim_detection['bbox'],
+                                "detection_index": dim_idx,
+                                "total_detections": len(dimension_detections),
+                                "candidates_tried": len(top_candidates),
+                                "debug_image": debug_path
+                            }
+                            break  # Success! Stop trying other bboxes
+                        except Exception as parse_error:
+                            attempt_info["parse_error"] = str(parse_error)
+                            attempted_results.append(attempt_info)
+                            # Continue to next bbox
+                            continue
+                    else:
+                        attempt_info["error"] = "No text extracted from this bbox"
+                        attempted_results.append(attempt_info)
+                        # Continue to next bbox
+                        continue
+                        
+                except Exception as e:
+                    attempted_results.append({
+                        "bbox_index": dim_idx,
+                        "bbox": dim_detection['bbox'],
+                        "error": str(e),
+                        "debug_image": f"debug_dimension_crops/dimension_bbox_{dim_idx}.png"
+                    })
+                    # Continue to next bbox
+                    continue
+            
+            # If we didn't find any valid dimension, report all attempts
+            if not dimension_info:
+                dimension_info = {
+                    "error": "Could not extract valid dimension from any bbox",
+                    "total_dimension_detections": len(dimension_detections),
+                    "candidates_tried": len(top_candidates),
+                    "attempts": attempted_results,
+                    "debug_directory": debug_dir
+                }
         
         # 8️⃣ Attempt to detect and parse scale information
         scale_info = None
@@ -436,9 +509,9 @@ async def detect_objects(
             if scale_ratio:
                 break
                 
-            # Try to extract text and check if it contains scale info
+            # Try to extract text and check if it contains scale info (use image_bytes)
             try:
-                text = extract_text_from_bbox_ocr(req.image_url, det['bbox'])
+                text = extract_text_from_bbox_ocr(image_bytes, det['bbox'])
                 if text and any(keyword in text.upper() for keyword in ['SCALE', '=', ':', 'NTS', 'NOT TO SCALE']):
                     try:
                         parsed_scale = parse_scale_text(text)
@@ -451,8 +524,8 @@ async def detect_objects(
             except Exception:
                 continue
         
-        # 9️⃣ Get shapes and convert areas with scale applied
-        shapes_with_colors = detect_shapes(req.image_url, colorize=True)
+        # 9️⃣ Get shapes and convert areas with scale applied (use image_bytes)
+        shapes_with_colors = detect_shapes(image_bytes, colorize=True)
         
         # Add area measurements to each shape
         if px_per_inch:
@@ -462,10 +535,15 @@ async def detect_objects(
                 drawing_sq_in = convert_area_px_to_sqin(area_px, px_per_inch)
                 shape['area_sq_in'] = drawing_sq_in
                 
-                # If we have scale, compute actual real-world area
+                # Compute square feet
+                # If we have scale, apply it; otherwise treat as 1:1 (drawing = reality)
                 if scale_ratio and scale_ratio > 0:
                     actual_sq_ft = compute_actual_sqft_from_drawing(area_px, px_per_inch, scale_ratio)
-                    shape['actual_sq_ft'] = actual_sq_ft
+                else:
+                    # No scale detected, assume 1:1 (drawing measurements are real measurements)
+                    actual_sq_ft = drawing_sq_in / 144.0
+                
+                shape['area_sq_ft'] = actual_sq_ft
         
         shapes = shapes_with_colors
 

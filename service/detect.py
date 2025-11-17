@@ -39,9 +39,9 @@ def _download_image_to_temp(url, suffix=".png", timeout=10):
 def detect_shapes(image_link, min_area=800, max_area=100000, colorize: bool = False):
     """Detect polygon path data for contours in an image.
 
-    `image_link` may be a local filesystem path or an HTTP/HTTPS URL. If it's a
-    URL the image is downloaded to a temporary file, processed, and then the
-    temporary file is removed.
+    `image_link` may be a local filesystem path, an HTTP/HTTPS URL, or bytes.
+    If it's a URL the image is downloaded to a temporary file, processed, and 
+    then the temporary file is removed.
 
     Returns a list of objects for each path in the form:
         {'path': 'M10,10L20,10L20,20Z', 'area': 1234.5}
@@ -50,23 +50,32 @@ def detect_shapes(image_link, min_area=800, max_area=100000, colorize: bool = Fa
         {'path': '...', 'area': 1234.5, 'color': '#aabbcc'}
     """
     downloaded_temp = None
-    # Determine whether image_link is a URL
-    is_url = isinstance(image_link, str) and image_link.lower().startswith(("http://", "https://"))
-
+    
     try:
-        if is_url:
-            # Choose a reasonable suffix; try to preserve extension if present
-            _, ext = os.path.splitext(image_link)
-            suffix = ext if ext and len(ext) <= 5 else ".png"
-            downloaded_temp = _download_image_to_temp(image_link, suffix=suffix)
-            image_path = downloaded_temp
+        # Handle bytes, URL, or file path
+        if isinstance(image_link, (bytes, bytearray)):
+            # Load directly from bytes
+            image = _load_cv2_image(image_link)
         else:
-            image_path = image_link
+            # Determine whether image_link is a URL
+            is_url = isinstance(image_link, str) and image_link.lower().startswith(("http://", "https://"))
 
-        # Load the image
-        image = cv2.imread(image_path)
+            if is_url:
+                # Choose a reasonable suffix; try to preserve extension if present
+                _, ext = os.path.splitext(image_link)
+                suffix = ext if ext and len(ext) <= 5 else ".png"
+                downloaded_temp = _download_image_to_temp(image_link, suffix=suffix)
+                image_path = downloaded_temp
+            else:
+                image_path = image_link
+
+            # Load the image
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Could not load image: {image_path}")
+        
         if image is None:
-            raise ValueError(f"Could not load image: {image_path}")
+            raise ValueError("Could not load image")
 
         (image_height, image_width) = image.shape[:2]
 
@@ -378,7 +387,11 @@ def parse_dimension_text_to_inches(dim_text: str) -> float:
     if not dim_text or not isinstance(dim_text, str):
         raise ValueError("No dimension text provided")
 
+    # Clean up common OCR errors and normalize
     s = dim_text.replace("\u2019", "'").replace("\u2033", '"').replace("\u201d", '"').replace("\u2032","'").strip()
+    # Replace common OCR misreads
+    s = s.replace('|', 'I').replace('l', '1').replace('O', '0').replace('o', '0')
+    
     feet = 0
     inches = 0.0
 
@@ -494,25 +507,103 @@ def find_horizontal_dimension_length_px(image_path_or_bytes, bbox, search_half_h
     return float(abs(x2 - x1))
 
 
-def extract_text_from_bbox_ocr(image_path_or_bytes, bbox):
+def extract_text_from_bbox_ocr(image_path_or_bytes, bbox, padding=20, save_debug=False, debug_path=None):
     """Extract text from a bounding box using pytesseract OCR.
     bbox: dict with x1,y1,x2,y2 keys.
+    padding: pixels to add around bbox for context
+    save_debug: if True, save cropped region to debug_path
     Returns the extracted text string (stripped)."""
     if pytesseract is None:
         raise ImportError("pytesseract is not installed. Install with: pip install pytesseract")
     
     img_cv = _load_cv2_image(image_path_or_bytes)
-    x1, y1, x2, y2 = int(round(bbox['x1'])), int(round(bbox['y1'])), int(round(bbox['x2'])), int(round(bbox['y2']))
+    h, w = img_cv.shape[:2]
     
-    # Crop the region
+    # Calculate bbox dimensions
+    bbox_width = bbox['x2'] - bbox['x1']
+    bbox_height = bbox['y2'] - bbox['y1']
+    
+    # If bbox is very thin (likely dimension line, not text), expand vertically MORE
+    if bbox_height < 15:
+        vertical_padding = max(50, int(bbox_width * 0.15))  # Expand vertically to capture text above/below line
+        horizontal_padding = padding
+    else:
+        vertical_padding = padding
+        horizontal_padding = padding
+    
+    # Crop with asymmetric padding
+    x1 = max(0, int(round(bbox['x1'])) - horizontal_padding)
+    y1 = max(0, int(round(bbox['y1'])) - vertical_padding)
+    x2 = min(w, int(round(bbox['x2'])) + horizontal_padding)
+    y2 = min(h, int(round(bbox['y2'])) + vertical_padding)
+    
+    # Crop ONLY this bbox region from the full image
     cropped = img_cv[y1:y2, x1:x2]
+    crop_h, crop_w = cropped.shape[:2]
     
-    # Convert to PIL for pytesseract
-    cropped_pil = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+    # Convert to grayscale
+    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     
-    # Extract text with basic config
-    text = pytesseract.image_to_string(cropped_pil, config='--psm 7')  # psm 7: single line
-    return text.strip()
+    # Adaptive upscaling based on crop size (smaller = more upscaling)
+    if crop_h < 30 or crop_w < 60:
+        scale_factor = 6  # Very small text
+    elif crop_h < 50 or crop_w < 100:
+        scale_factor = 4  # Small text
+    else:
+        scale_factor = 3  # Normal text
+    
+    gray_scaled = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
+    
+    best_text = ""
+    best_image = None
+    
+    # Try 3 quick preprocessing techniques
+    preprocessed_images = []
+    
+    # 1. Otsu's thresholding (usually best)
+    _, otsu = cv2.threshold(gray_scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    preprocessed_images.append(otsu)
+    
+    # 2. Inverted Otsu (for white text on dark background)
+    _, otsu_inv = cv2.threshold(gray_scaled, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    preprocessed_images.append(otsu_inv)
+    
+    # 3. Adaptive threshold
+    adaptive = cv2.adaptiveThreshold(gray_scaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                    cv2.THRESH_BINARY, 11, 2)
+    preprocessed_images.append(adaptive)
+    
+    # Try OCR on each preprocessed image (fast - only 2 PSM modes)
+    for preprocessed in preprocessed_images:
+        preprocessed_pil = Image.fromarray(preprocessed)
+        
+        # Only try the 2 most reliable modes
+        for config in ['--psm 7 --oem 3', '--psm 13 --oem 3']:
+            try:
+                text = pytesseract.image_to_string(preprocessed_pil, config=config).strip()
+                # Prefer text with dimension-like patterns
+                if text and ('"' in text or "'" in text or '-' in text or any(c.isdigit() for c in text)):
+                    if len(text) > len(best_text):
+                        best_text = text
+                        best_image = preprocessed
+                        # If we found good text, stop searching
+                        if len(best_text) > 3:
+                            break
+            except Exception:
+                continue
+        
+        # Early exit if we found good text
+        if len(best_text) > 3:
+            break
+    
+    # Save debug image if requested (save the best preprocessed version)
+    if save_debug and debug_path:
+        if best_image is not None:
+            cv2.imwrite(debug_path, best_image)
+        else:
+            cv2.imwrite(debug_path, preprocessed_images[0])
+    
+    return best_text
 
 
 def compute_px_per_inch_from_dimension(image_path_or_bytes, bbox, dim_text):

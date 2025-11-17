@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import os
 import tempfile
 import cv2
-from service.detect import detect_shapes, build_svg_from_paths, extract_text_from_bbox_ocr, compute_px_per_inch_from_dimension, convert_area_px_to_sqin
+from service.detect import detect_shapes, build_svg_from_paths, extract_text_from_bbox_ocr, compute_px_per_inch_from_dimension, convert_area_px_to_sqin, parse_scale_text, compute_actual_sqft_from_drawing
 
 app = FastAPI(
     title="BidReady AI Model API",
@@ -425,14 +425,47 @@ async def detect_objects(
                 # If dimension parsing fails, continue without conversion
                 dimension_info = {"error": str(e)}
         
-        # 8️⃣ Get shapes and convert areas to square inches if px_per_inch available
+        # 8️⃣ Attempt to detect and parse scale information
+        scale_info = None
+        scale_ratio = None
+        
+        # Look for detections that might contain scale info (could be labeled as "Dimension" or text regions)
+        # We'll scan all detections and try OCR to find scale text
+        for det in detections:
+            # Skip if we already found a valid scale
+            if scale_ratio:
+                break
+                
+            # Try to extract text and check if it contains scale info
+            try:
+                text = extract_text_from_bbox_ocr(req.image_url, det['bbox'])
+                if text and any(keyword in text.upper() for keyword in ['SCALE', '=', ':', 'NTS', 'NOT TO SCALE']):
+                    try:
+                        parsed_scale = parse_scale_text(text)
+                        scale_ratio = parsed_scale.get('ratio')
+                        scale_info = parsed_scale
+                        break
+                    except Exception:
+                        # Not a valid scale text, continue searching
+                        continue
+            except Exception:
+                continue
+        
+        # 9️⃣ Get shapes and convert areas with scale applied
         shapes_with_colors = detect_shapes(req.image_url, colorize=True)
         
-        # Add area_sq_in to each shape if px_per_inch computed
+        # Add area measurements to each shape
         if px_per_inch:
             for shape in shapes_with_colors:
                 area_px = shape.get('area', 0)
-                shape['area_sq_in'] = convert_area_px_to_sqin(area_px, px_per_inch)
+                # Drawing area in square inches (on the floor plan)
+                drawing_sq_in = convert_area_px_to_sqin(area_px, px_per_inch)
+                shape['area_sq_in'] = drawing_sq_in
+                
+                # If we have scale, compute actual real-world area
+                if scale_ratio and scale_ratio > 0:
+                    actual_sq_ft = compute_actual_sqft_from_drawing(area_px, px_per_inch, scale_ratio)
+                    shape['actual_sq_ft'] = actual_sq_ft
         
         shapes = shapes_with_colors
 
@@ -460,6 +493,10 @@ async def detect_objects(
         # Add dimension info if available
         if dimension_info:
             response_data["dimension_calibration"] = dimension_info
+        
+        # Add scale info if available
+        if scale_info:
+            response_data["scale_info"] = scale_info
         
         return response_data
 

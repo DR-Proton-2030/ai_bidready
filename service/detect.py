@@ -291,6 +291,87 @@ def detect_shapes_html(
         return html
 
 
+def parse_scale_text(scale_text: str):
+    """Parse scale text and return the scale ratio.
+    
+    Supported formats:
+    - "1/4\" = 1'-0\"" -> drawing_inches=0.25, real_inches=12.0, ratio=48.0
+    - "1/8\" = 1'-0\"" -> drawing_inches=0.125, real_inches=12.0, ratio=96.0
+    - "Scale: 1:100" -> ratio=100.0
+    - "Scale: NOT TO SCALE" -> None (no scale)
+    
+    Returns:
+    - dict with 'ratio' (real/drawing), 'type' ('architectural', 'numeric', 'none')
+    - ratio represents how many real-world inches are represented by 1 drawing inch
+    """
+    if not scale_text or not isinstance(scale_text, str):
+        raise ValueError("No scale text provided")
+    
+    s = scale_text.replace("\u2019", "'").replace("\u2033", '"').replace("\u201d", '"').replace("\u2032","'").strip().upper()
+    
+    # Check for "NOT TO SCALE" or "NTS"
+    if "NOT TO SCALE" in s or s == "NTS" or "N.T.S" in s:
+        return {"ratio": None, "type": "none", "text": scale_text}
+    
+    # Pattern 1: Architectural scale like "1/4\" = 1'-0\"" or "1/8\" = 1'-0\""
+    # Format: drawing_size = real_size
+    # Flexible pattern: num/den = feet-inches
+    pattern_arch = r"(?P<draw_num>\d+)/(?P<draw_den>\d+).*?=.*?(?P<real_ft>\d+).*?-.*?(?P<real_in>\d+)"
+    m_arch = re.search(pattern_arch, s)
+    if m_arch:
+        draw_inches = float(m_arch.group("draw_num")) / float(m_arch.group("draw_den"))
+        real_feet = int(m_arch.group("real_ft"))
+        real_inches = int(m_arch.group("real_in"))
+        real_total_inches = real_feet * 12.0 + real_inches
+        
+        if draw_inches <= 0:
+            raise ValueError(f"Invalid drawing size in scale: {scale_text}")
+        
+        # Ratio = real_world_inches / drawing_inches
+        ratio = real_total_inches / draw_inches
+        return {
+            "ratio": ratio,
+            "type": "architectural",
+            "text": scale_text,
+            "drawing_inches": draw_inches,
+            "real_inches": real_total_inches
+        }
+    
+    # Pattern 2: Numeric scale like "Scale: 1:100" or "1:100"
+    pattern_numeric = r"(?:SCALE\s*:?\s*)?1\s*:\s*(?P<ratio>\d+(?:\.\d+)?)"
+    m_numeric = re.search(pattern_numeric, s)
+    if m_numeric:
+        ratio = float(m_numeric.group("ratio"))
+        return {
+            "ratio": ratio,
+            "type": "numeric",
+            "text": scale_text
+        }
+    
+    # Pattern 3: Alternative architectural format "1/4 = 1-0" (no quotes)
+    pattern_arch_alt = r"(?P<draw_num>\d+)\s*/\s*(?P<draw_den>\d+)\s*=\s*(?P<real_ft>\d+)\s*-\s*(?P<real_in>\d+)"
+    m_arch_alt = re.search(pattern_arch_alt, s)
+    if m_arch_alt:
+        draw_inches = float(m_arch_alt.group("draw_num")) / float(m_arch_alt.group("draw_den"))
+        real_feet = int(m_arch_alt.group("real_ft"))
+        real_inches = int(m_arch_alt.group("real_in"))
+        real_total_inches = real_feet * 12.0 + real_inches
+        
+        if draw_inches <= 0:
+            raise ValueError(f"Invalid drawing size in scale: {scale_text}")
+        
+        ratio = real_total_inches / draw_inches
+        return {
+            "ratio": ratio,
+            "type": "architectural",
+            "text": scale_text,
+            "drawing_inches": draw_inches,
+            "real_inches": real_total_inches
+        }
+    
+    raise ValueError(f"Could not parse scale from: {scale_text}")
+
+
 def parse_dimension_text_to_inches(dim_text: str) -> float:
     """Parse dimension strings like `6'- 3 3/4\"`, `6'3.75\"`, `75\"`, `6 ft 3 3/4 in`
     and return total inches (float)."""
@@ -458,4 +539,50 @@ def convert_area_px_to_sqft(area_px: float, px_per_inch: float) -> float:
     """Convert px^2 to square feet: convert to sq in then divide by 144."""
     sq_in = convert_area_px_to_sqin(area_px, px_per_inch)
     return sq_in / 144.0
+
+
+def apply_scale_to_area(area_sq_in: float, scale_ratio: float) -> float:
+    """Apply scale ratio to convert drawing area to actual real-world area.
+    
+    Args:
+        area_sq_in: Area in square inches (on the drawing)
+        scale_ratio: Scale ratio (real_world_inches / drawing_inches)
+                    e.g., for "1/4\" = 1'-0\"", ratio = 48.0
+    
+    Returns:
+        Actual real-world area in square inches
+    """
+    if scale_ratio is None or scale_ratio <= 0:
+        raise ValueError("Invalid scale ratio")
+    
+    # Area scales by the square of the linear scale
+    # If 1 drawing inch = 48 real inches, then 1 sq in (drawing) = 48^2 sq in (real)
+    return area_sq_in * (scale_ratio ** 2)
+
+
+def compute_actual_sqft_from_drawing(area_px: float, px_per_inch: float, scale_ratio: float) -> float:
+    """Convert pixel area to actual square feet using calibration and scale.
+    
+    Args:
+        area_px: Area in pixels²
+        px_per_inch: Pixels per inch (from dimension calibration)
+        scale_ratio: Scale ratio from scale text (real/drawing inches)
+    
+    Returns:
+        Actual real-world area in square feet
+    """
+    # Step 1: Convert pixels to drawing square inches
+    drawing_sq_in = convert_area_px_to_sqin(area_px, px_per_inch)
+    
+    # Step 2: Apply scale to get real-world square inches
+    if scale_ratio and scale_ratio > 0:
+        real_sq_in = apply_scale_to_area(drawing_sq_in, scale_ratio)
+    else:
+        real_sq_in = drawing_sq_in
+    
+    # Step 3: Convert to square feet
+    real_sq_ft = real_sq_in / 144.0
+    
+    return real_sq_ft
+
 

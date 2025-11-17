@@ -41,12 +41,21 @@ A REST API for floor plan object detection using YOLOv8. This API wraps the AI m
   - `selected_labels`: Comma-separated list of labels to detect (optional)
   - `use_tiling`: Enable/disable tiling for large images (optional, auto-detected if null)
 
-**New Feature:** Automatic area measurement in square inches!
+**New Feature:** Automatic area measurement with scale detection!
 - If the floor plan includes a "Dimension" annotation (e.g., "6'-3 3/4\""), the API will:
   1. Detect the dimension text using OCR
   2. Calculate the pixel-to-inch ratio from the dimension line
   3. Convert all shape areas from pixels² to square inches
   4. Return `area_sq_in` in each shape object
+- If the floor plan includes a scale annotation (e.g., "1/4\" = 1'-0\""), the API will:
+  1. Detect and parse the scale text using OCR
+  2. Apply the scale ratio to convert drawing measurements to real-world measurements
+  3. Return `actual_sq_ft` (actual square footage) in each shape object
+
+**Supported Scale Formats:**
+- Architectural: `1/4" = 1'-0"`, `1/8" = 1'-0"`, etc.
+- Numeric: `Scale: 1:100`, `1:50`, etc.
+- No scale: `Scale: NOT TO SCALE`, `NTS`
 
 #### 5. Object Detection (Simple)
 - **POST** `/detect-simple`  
@@ -88,6 +97,7 @@ A REST API for floor plan object detection using YOLOv8. This API wraps the AI m
       "path": "M100,200L150,200L150,280L100,280Z",
       "area": 4000.0,
       "area_sq_in": 25.0,
+      "actual_sq_ft": 1600.0,
       "color": "#3F5EFB"
     }
   ],
@@ -97,18 +107,33 @@ A REST API for floor plan object detection using YOLOv8. This API wraps the AI m
     "px_length": 1212.5,
     "real_inches": 75.75,
     "px_per_inch": 16.0
+  },
+  "scale_info": {
+    "ratio": 48.0,
+    "type": "architectural",
+    "text": "1/4\" = 1'-0\"",
+    "drawing_inches": 0.25,
+    "real_inches": 12.0
   }
 }
 ```
 
 **New Fields:**
-- `shapes`: Array of detected contour shapes with SVG paths, pixel area, and **square inch area** (if dimension found)
+- `shapes`: Array of detected contour shapes with SVG paths, pixel area, square inch area, and **actual square feet**
+  - `area`: Original pixel area
+  - `area_sq_in`: Drawing area in square inches (if dimension calibration successful)
+  - `actual_sq_ft`: **Real-world area in square feet** (if both dimension and scale detected)
 - `shapes_svg`: SVG overlay string for visualizing shapes
 - `dimension_calibration`: Calibration data from the first detected Dimension annotation (if any)
   - `text`: OCR-extracted dimension text (e.g., "6'- 3 3/4\"")
   - `px_length`: Measured pixel length of the dimension line
   - `real_inches`: Parsed real-world length in inches
   - `px_per_inch`: Calculated pixel-per-inch ratio used for area conversion
+- `scale_info`: Scale information from detected scale annotation (if any)
+  - `ratio`: Scale ratio (real_inches / drawing_inches)
+  - `type`: "architectural", "numeric", or "none"
+  - `text`: Original scale text
+  - `drawing_inches`, `real_inches`: Parsed values (for architectural scales)
 
 ## Usage Examples
 

@@ -293,6 +293,11 @@ async def detect_objects(req: DetectRequest):
                 )
         else:
             selected_labels_list = available_labels
+        
+        # Internal: Ensure 'Dimension' is always tracked for calibration, even if user didn't select it
+        internal_labels_to_track = set(selected_labels_list)
+        internal_labels_to_track.add('Dimension')
+        internal_labels_to_track = list(internal_labels_to_track)
 
         # 5️⃣ Validate confidence
         if not 0.0 <= req.confidence <= 1.0:
@@ -323,7 +328,7 @@ async def detect_objects(req: DetectRequest):
                 
                 for box in results[0].boxes:
                     label = model.names[int(box.cls)]
-                    if label in selected_labels_list:
+                    if label in internal_labels_to_track:
                         # Use per-class threshold if provided else default to req.confidence
                         label_min_conf = per_class_conf_map.get(label, req.confidence)
                         if float(box.conf) < label_min_conf:
@@ -364,7 +369,7 @@ async def detect_objects(req: DetectRequest):
             filtered = []
             for box in results[0].boxes:
                 label = model.names[int(box.cls)]
-                if label not in selected_labels_list:
+                if label not in internal_labels_to_track:
                     continue
                 label_min_conf = per_class_conf_map.get(label, req.confidence)
                 if float(box.conf) < label_min_conf:
@@ -512,8 +517,11 @@ async def detect_objects(req: DetectRequest):
         scale_ratio = None
         
         # Look for detections that might contain scale info (could be labeled as "Dimension" or text regions)
-        # We'll scan all detections and try OCR to find scale text
-        for det in detections:
+        # OPTIMIZATION: Only look at 'Dimension' labels to avoid making 100s of OCR calls on Walls/Doors
+        scale_candidates = [d for d in detections if d['label'] == 'Dimension']
+        
+        # We'll scan candidate detections and try OCR to find scale text
+        for det in scale_candidates:
             # Skip if we already found a valid scale
             if scale_ratio:
                 break
@@ -532,6 +540,32 @@ async def detect_objects(req: DetectRequest):
                         continue
             except Exception:
                 continue
+        
+        # Fallback: If no scale found in detections, scan the bottom 20% of the image (typical title block area)
+        if not scale_info:
+            try:
+                # Define bbox for bottom 20%
+                height = original_size[1]
+                width = original_size[0]
+                bottom_bbox = {
+                    'x1': 0,
+                    'y1': int(height * 0.8),
+                    'x2': width,
+                    'y2': height
+                }
+                
+                # Try OCR on the title block area
+                # Note: This adds one OCR call but handles cases where YOLO missed the text bbox
+                tb_text = extract_text_from_bbox_rekognition(image_bytes, bottom_bbox)
+                if tb_text and any(keyword in tb_text.upper() for keyword in ['SCALE', '=', ':', 'NTS', 'NOT TO SCALE']):
+                    parsed_scale = parse_scale_text(tb_text)
+                    if parsed_scale.get('ratio'):
+                        scale_ratio = parsed_scale.get('ratio')
+                        scale_info = parsed_scale
+                        # Enforce source type for debugging
+                        scale_info['source'] = 'title_block_fallback'
+            except Exception:
+                pass
         
         # 9️⃣ Get shapes and convert areas with scale applied (use image_bytes)
         shapes_with_colors = detect_shapes(image_bytes, colorize=True)
@@ -579,9 +613,16 @@ async def detect_objects(req: DetectRequest):
         # Always include up to 5 smallest Dimension boxes for OCR on client if needed
         if dimension_candidates:
             response_data["dimension_candidates"] = dimension_candidates
-        # Echo per-class threshold mapping for debugging/observability
         if per_class_conf_map:
             response_data["per_class_conf"] = per_class_conf_map
+        
+        # FINAL FILTER: Remove objects from 'detections' if user didn't ask for them
+        # (e.g. we forced 'Dimension' for calibration, but user might not want to see it)
+        final_detections = []
+        for det in response_data['detections']:
+            if det['label'] in selected_labels_list:
+                final_detections.append(det)
+        response_data['detections'] = final_detections
         
         # Add dimension info if available
         if dimension_info:

@@ -41,7 +41,7 @@ def _download_image_to_temp(url, suffix=".png", timeout=10):
     return tmp.name
 
 
-def detect_shapes(image_link, min_area=800, max_area=100000, colorize: bool = False):
+def detect_shapes(image_link, min_area=800, max_area=2000000, colorize: bool = False):
     """Detect polygon path data for contours in an image.
 
     `image_link` may be a local filesystem path, an HTTP/HTTPS URL, or bytes.
@@ -87,19 +87,43 @@ def detect_shapes(image_link, min_area=800, max_area=100000, colorize: bool = Fa
         # Convert the image to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Apply Otsu thresholding
-        _, thresholded = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # Calculate adaptive kernel size based on image size to reliably bridge doors
+        # A 4000px image might need a 25px kernel. A 1000px image needs a 7px kernel.
+        k_size = max(5, int(min(image_width, image_height) * 0.006))
+        
+        # Apply Otsu thresholding: walls become white (255), empty space becomes black (0)
+        _, lines = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # Find contours
-        contours, _ = cv2.findContours(thresholded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # 1. Heavily dilate the white walls to close gap/doors so rooms become sealed black blobs
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
+        closed_lines = cv2.morphologyEx(lines, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
+        # 2. Invert: Now walls are black, and rooms/corridors are isolated white blobs!
+        rooms_mask = cv2.bitwise_not(closed_lines)
+
+        # Find contours of the white room blobs
+        contours, _ = cv2.findContours(rooms_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         # Initialize a list to store the detected shapes
         detected_plots_position = []
+        
+        # Force a reasonable minimum area to ignore tiny enclosed text boxes, closets, or noise
+        # A room on a standard blueprint is generously > 10000 pixels
+        effective_min = max(min_area, (image_width * image_height) * 0.001)
+        effective_max = max(max_area, (image_width * image_height) * 0.85)
 
         for i, contour in enumerate(contours):
             contour_area = cv2.contourArea(contour)
-            # Check if the contour area is within the specified range
-            if min_area <= contour_area <= max_area:
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Smart context filters to drop Page Margins and Legend Table Cells
+            on_limit_edge = (x <= 20 or y <= 20 or (x + w) >= image_width - 20 or (y + h) >= image_height - 20)
+            in_legend_strip = (x > image_width * 0.85)  # typically the right 15% is title blocks
+            aspect = max(w, h) / min(w, h) if min(w, h) > 0 else 9999
+            
+            # Check if the contour area is within the specified range, strictly keeping shapes larger than effective_min
+            # Also ensure it isn't an exterior margin, a table cell, or an infinitely long grid line.
+            if (effective_min <= contour_area <= effective_max) and not on_limit_edge and not in_legend_strip and aspect < 40:
                 path_data = "M" + "L".join([f"{point[0][0]},{point[0][1]}" for point in contour]) + "Z"
                 # compute contour area
                 contour_area = float(contour_area)
@@ -228,7 +252,7 @@ def build_svg_from_paths(
 def detect_shapes_html(
         image_link,
         min_area=1000,
-        max_area=90000,
+        max_area=2000000,
         stroke_color="#ff0000",
         stroke_width=2,
     svg_fill="none",

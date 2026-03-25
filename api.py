@@ -244,7 +244,7 @@ async def get_building_mask_from_gemini(image: PIL.Image.Image):
     Sends the blueprint to Gemini 1.5 Flash / 3.0 Preview to dynamically validate
     where the true architectural structure is, skipping outside grid tracking.
     """
-    api_key = "AIzaSyD6zQRkBbD6CFFnffit2A-nHiX8bOYX5pU"
+    api_key = "AIzaSyBxWtNN7yGz40aSP0K2OLZyDhqm_z5kJg4"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
     
     max_size = 1000
@@ -372,6 +372,43 @@ import numpy as np
 import PIL.Image
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
+
+def calculate_core_building_bbox(all_detections, img_w, img_h):
+    """
+    Computes a tight bounding box encapsulating the core architectural elements 
+    (Doors, Windows, Stairs, Columns), effectively masking out outer grid dimension lines.
+    """
+    core_labels = {"Door", "Window", "Stair Case", "Column"}
+    
+    xmin, ymin = img_w, img_h
+    xmax, ymax = 0.0, 0.0
+    
+    found_core = False
+    
+    for det in all_detections:
+        label = det.get("label", "")
+        # Box structure could come from `box.xyxy` in iteration or dict
+        b = det if "x1" in det else det.get("bbox", {})
+        if label in core_labels and "x1" in b:
+            xmin = min(xmin, float(b["x1"]))
+            ymin = min(ymin, float(b["y1"]))
+            xmax = max(xmax, float(b["x2"]))
+            ymax = max(ymax, float(b["y2"]))
+            found_core = True
+
+    if not found_core:
+        return None  # No core elements found to securely mask around
+        
+    # Add a safe 3% padding just like the Gemini layout did
+    pad_x = max(20, (xmax - xmin) * 0.03)
+    pad_y = max(20, (ymax - ymin) * 0.03)
+    
+    return {
+        "xmin": max(0.0, xmin - pad_x),
+        "ymin": max(0.0, ymin - pad_y),
+        "xmax": min(img_w, xmax + pad_x),
+        "ymax": min(img_h, ymax + pad_y)
+    }
 
 router = APIRouter()
 
@@ -541,12 +578,16 @@ async def detect_objects(req: DetectRequest):
             detections = merge_detections(
                 all_detections, original_size, iou_threshold=0.3
             )
+            
+            # Pure Python fallback if Gemini API fails to provide structural envelope
+            if not padded_bbox:
+                padded_bbox = calculate_core_building_bbox(detections, original_size[0], original_size[1])
 
             def is_valid_det(d):
                 if d["label"] == "Wall" and is_false_positive_wall(d["bbox"], original_size[0], original_size[1]):
                     return False
                     
-                # Gemini structural boundary validation (drops outer noise like grid lines)
+                # Gemini/Fallback structural boundary validation (drops outer noise like grid lines)
                 if padded_bbox:
                     cx = (d["bbox"]["x1"] + d["bbox"]["x2"]) / 2.0
                     cy = (d["bbox"]["y1"] + d["bbox"]["y2"]) / 2.0
@@ -604,29 +645,41 @@ async def detect_objects(req: DetectRequest):
                 if float(box.conf) < label_min_conf:
                     continue
 
-                # Check for false positive wall
-                if label == "Wall":
-                    b_check = {
-                        "x1": float(box.xyxy[0][0]),
-                        "y1": float(box.xyxy[0][1]),
-                        "x2": float(box.xyxy[0][2]),
-                        "y2": float(box.xyxy[0][3]),
-                    }
-                    if is_false_positive_wall(
-                        b_check, original_size[0], original_size[1]
-                    ):
-                        continue
-                        
-                # Gemini structural boundary validation (drops outer noise)
+                # Prepare the box format 
+                b_check = {
+                    "x1": float(box.xyxy[0][0]),
+                    "y1": float(box.xyxy[0][1]),
+                    "x2": float(box.xyxy[0][2]),
+                    "y2": float(box.xyxy[0][3]),
+                }
+                
+                # We need to calculate padded bbox on the fly if needed. Since we're in the 'else' block, 
+                # we'll build a temp list if padded_bbox is None, then filter.
+                filtered.append({
+                    "box": box,
+                    "label": label,
+                    "bbox": b_check,
+                    "conf": float(box.conf)
+                })
+
+            if not padded_bbox:
+                padded_bbox = calculate_core_building_bbox(filtered, original_size[0], original_size[1])
+
+            final_filtered = []
+            for temp_box in filtered:
+                if temp_box["label"] == "Wall" and is_false_positive_wall(temp_box["bbox"], original_size[0], original_size[1]):
+                    continue
+                    
+                # Gemini/Fallback structural boundary validation
                 if padded_bbox:
-                    cx = (float(box.xyxy[0][0]) + float(box.xyxy[0][2])) / 2.0
-                    cy = (float(box.xyxy[0][1]) + float(box.xyxy[0][3])) / 2.0
+                    cx = (temp_box["bbox"]["x1"] + temp_box["bbox"]["x2"]) / 2.0
+                    cy = (temp_box["bbox"]["y1"] + temp_box["bbox"]["y2"]) / 2.0
                     if not (padded_bbox["xmin"] <= cx <= padded_bbox["xmax"] and padded_bbox["ymin"] <= cy <= padded_bbox["ymax"]):
                         continue
 
-                filtered.append(box)
+                final_filtered.append(temp_box["box"])
 
-            for box in filtered:
+            for box in final_filtered:
                 detections.append(
                     {
                         "label": model.names[int(box.cls)],
@@ -640,7 +693,7 @@ async def detect_objects(req: DetectRequest):
                     }
                 )
 
-            results[0].boxes = filtered
+            results[0].boxes = final_filtered
             annotated = results[0].plot()[:, :, ::-1]
 
         # Count objects
